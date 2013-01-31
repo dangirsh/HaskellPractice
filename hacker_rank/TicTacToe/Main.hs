@@ -7,15 +7,8 @@ import Data.List (sort)
 
 -- 3 Given Helpers --
 main = do
-
-    -- If player is X, I'm the first player.
-    -- If player is O, I'm the second player.
     player <- getLine
-
-    -- Read the board now. The board is a list of strings filled with X, O or _.
     board <- getList 3
-
-    -- Proceed with processing and print 2 integers separated by a single space.
     putStrLn.(\(x, y) -> show x ++ " " ++ show y).nextPosition player $ board
 
 -- Reads the input.
@@ -28,15 +21,15 @@ getList n =
         is <- getList(n-1);
         return (i:is)
 
--- player == "X" or "O" representing the next move to be made.
--- board is a list of strings with 'X', 'O' or '_' :- the current state of the board
--- return a pair (x,y) which is your next move
 nextPosition :: String -> [String] -> Position
-nextPosition playerStr boardStr = nextPosition' player board
+nextPosition playerStr boardStr =
+    if isEmpty board then -- early game optimization. fix after adding memoization
+        firstMove
+    else
+        snd $ nextPosition' player board
     where
         board = toBoard boardStr
         player = toPlayer $ head playerStr
-
 
 -- Begin my code --
 
@@ -72,9 +65,9 @@ playerVal O = -1
 playerVal Neither = 0
 
 otherPlayer :: Player -> Player
-otherPlayer Neither = Neither
 otherPlayer X = O
 otherPlayer O = X
+otherPlayer Neither = Neither
 
 
 -- Board helpers --
@@ -83,57 +76,65 @@ toBoard :: [String] -> Board
 toBoard boardStr = \(r, c) -> toPlayer (boardStr !! r !! c)
 
 makeBoardStr :: Board -> String
-makeBoardStr b = init $ concat $ rowMap ((flip (++) "\n") . (concatMap show)) b
+makeBoardStr = init . concat . (rowMap ((++ "\n") . (concatMap show)))
 
 transposeBoard :: Board -> Board
 transposeBoard b = \(r, c) -> b (c, r)
 
 rowMap :: ([Player] -> a) -> Board -> [a]
-rowMap f b = map (f . rowAsList) [0..n]
+rowMap f b = [f $ getRow r | r <- [0..n]]
     where
-        rowAsList r = map (\c -> b (r, c)) [0..n]
+        getRow r = [b (r, c) | c <- [0..n]]
+
+boardMap :: (Player -> a) -> Board -> [a]
+boardMap f b = concat (rowMap (map f) b)
+
+allPoses :: [Position]
+allPoses = [(r, c) | r <- [0..n], c <- [0..n]]
 
 diag1 :: Board -> [Player]
-diag1 b = [b (r, c) | r <- [0..n], c <- [0..n], r == c]
+diag1 = (flip map) $ filter (\(r, c) -> r == c) allPoses
 
 diag2 :: Board -> [Player]
-diag2 b = [b (r, c) | r <- [0..n], c <- [0..n], r + c == n]
+diag2 = (flip map) $ filter (\(r, c) -> r + c == n) allPoses
 
 -- Early game optimizations --
 
-blankBoard :: Board -> Bool
-blankBoard b = all ((== Neither) . b) [(r, c) | r <- [0..n], c <- [0..n]]
+isEmpty :: Board -> Bool
+isEmpty = and . (boardMap (== Neither))
 
 firstMove = (0, 0)
 
 -- Game Logic --
 
-nextPosition' :: Player -> Board -> Position
+-- Starts the minimax search
+nextPosition' :: Player -> Board -> (Int, Position)
 nextPosition' p b =
-    if blankBoard b then
-        firstMove
-    else if null res then
-        error "Board is full!"
-    else snd $ playerFunc p $ res
+    (playerFunc p) (zip moveScores (openPoses b))
     where
-        res = [(search (otherPlayer p) (addPos b p pos), pos) | pos <- openPoses b]
+        moveScores = map (minimaxVal p) (nextBoards b p)
 
--- Minimax search
-search :: Player -> Board -> Int
-search p b =
-    if isWinning p b then
-        playerVal p
-    else if null nextBoards then
+minimaxVal :: Player -> Board -> Int
+minimaxVal p b =
+    if winningPlayer b /= Neither then -- win leaf
+        playerVal $ winningPlayer b
+    else if isFull b then -- tie leaf
         playerVal Neither
-    else
-        playerFunc p $ map (search (otherPlayer p)) nextBoards
-    where
-        nextBoards = map (addPos b p) (openPoses b)
+    else -- node (game not over)
+        fst $ nextPosition' (otherPlayer p) b
 
--- True if the board is in a winning state for the player.
--- False otherwise.
-isWinning :: Player -> Board -> Bool
-isWinning p = inLine [p, p, p]
+-- returns all possible boards that a player can move to
+nextBoards :: Board -> Player -> [Board]
+nextBoards b p = map (addPos b p) (openPoses b)
+
+winningPlayer :: Board -> Player
+winningPlayer b =
+    if inLine [X, X, X] b then
+        X
+    else if inLine [O, O, O] b then
+        O
+    else
+        Neither
 
 addPos :: Board -> Player -> Position -> Board
 addPos b p pos = \pos' -> if pos == pos' then p else b pos'
@@ -151,3 +152,33 @@ inLine ps b = checkHoriz || checkVert || checkDiag
         checkDiag = checkThree (diag1 b) || checkThree (diag2 b)
         checkRows = or . (rowMap checkThree)
         checkThree = ((==) (sort ps)) . sort
+
+
+-- debug --
+
+-- evaluates the final board and moves produced with the given first move
+playGame :: Position -> (Board, [Position])
+playGame firstMove =
+    play X (addPos blankBoard O firstMove) [firstMove]
+    where
+        blankBoard = \p -> Neither
+        gameOver b = (winningPlayer b) /= Neither || isFull b
+        play p b moves =
+            if gameOver b then
+                (b, moves)
+            else
+                let move = snd $ nextPosition' p b in
+                play (otherPlayer p) (addPos b p move) (move:moves)
+
+
+isFull :: Board -> Bool
+isFull b = and $ boardMap (Neither /=) b
+
+isTie :: Board -> Bool
+isTie b = isFull b && winningPlayer b == Neither
+
+debug :: [(String, [Position])]
+debug =
+    let boards = map playGame allPoses in
+    let tied_boards = filter (not . isTie . fst) boards in
+    map (\(b, ms) -> (makeBoardStr b, ms)) tied_boards
