@@ -42,7 +42,7 @@ instance Show Player where
     show O = "O"
     show Neither = "_"
 
--- The input board must be (n-1) x (n-1)
+-- The input board must be (n+1) x (n+1)
 n = 2
 
 -- Player helpers --
