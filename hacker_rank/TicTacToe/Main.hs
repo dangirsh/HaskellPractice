@@ -4,6 +4,7 @@
 module Main where
 
 import Data.List (sort)
+import qualified Data.Map as Map
 
 -- 3 Given Helpers --
 main = do
@@ -23,10 +24,7 @@ getList n =
 
 nextPosition :: String -> [String] -> Position
 nextPosition playerStr boardStr =
-    if isEmpty board then -- early game optimization. fix after adding memoization
-        firstMove
-    else
-        snd $ nextPosition' player board
+    snd $ nextPosition' Map.empty player board
     where
         board = toBoard boardStr
         player = toPlayer $ head playerStr
@@ -34,6 +32,7 @@ nextPosition playerStr boardStr =
 -- Begin my code --
 
 type Position = (Int, Int)
+type ScoredPosition = (Int, Position)
 data Player = X | O | Neither deriving (Eq, Ord)
 type Board = Position -> Player
 
@@ -52,12 +51,10 @@ toPlayer 'X' = X
 toPlayer 'O' = O
 toPlayer _ = Neither
 
--- With this, need to maintain invariant that Min player wants small ordinals
--- and Max player wants large ordinals (notjust Ints). See nextPosition'.
 playerFunc :: Ord a => Player -> ([a] -> a)
 playerFunc X = maximum
 playerFunc O = minimum
-playerFunc _ = error "Only X and O have player functions!"
+playerFunc Neither = error "Only X and O have player functions!"
 
 playerVal :: Player -> Int
 playerVal X = 1
@@ -89,96 +86,85 @@ rowMap f b = [f $ getRow r | r <- [0..n]]
 boardMap :: (Player -> a) -> Board -> [a]
 boardMap f b = concat (rowMap (map f) b)
 
-allPoses :: [Position]
-allPoses = [(r, c) | r <- [0..n], c <- [0..n]]
+allPositions :: [Position]
+allPositions = [(r, c) | r <- [0..n], c <- [0..n]]
 
 diag1 :: Board -> [Player]
-diag1 = (flip map) $ filter (\(r, c) -> r == c) allPoses
+diag1 b = map b $ filter (\(r, c) -> r == c) allPositions
 
 diag2 :: Board -> [Player]
-diag2 = (flip map) $ filter (\(r, c) -> r + c == n) allPoses
+diag2 b = map b $ filter (\(r, c) -> r + c == n) allPositions
 
--- Early game optimizations --
+isFull :: Board -> Bool
+isFull = and . (boardMap (/= Neither))
 
 isEmpty :: Board -> Bool
 isEmpty = and . (boardMap (== Neither))
 
-firstMove = (0, 0)
-
 -- Game Logic --
 
 -- Starts the minimax search
-nextPosition' :: Player -> Board -> (Int, Position)
-nextPosition' p b =
-    (playerFunc p) (zip moveScores (openPoses b))
-    where
-        moveScores = map (minimaxVal p) (nextBoards b p)
+nextPosition' :: Map.Map String ScoredPosition -> Player -> Board -> ScoredPosition
+nextPosition' m p b =
+    let bStr = makeBoardStr b in
+    case Map.lookup bStr m of
+        Just memVal -> memVal
+        Nothing ->
+            let moveScores = foldl (minimaxVal p) m (nextBoards b p) in
+            let bestScoredPos = (playerFunc p) $ zip moveScores (openPosition b)
+            let newM = Map.insert bStr bestScoredPos m
 
 minimaxVal :: Player -> Board -> Int
-minimaxVal p b =
-    if winningPlayer b /= Neither then -- win leaf
-        playerVal $ winningPlayer b
-    else if isFull b then -- tie leaf
-        playerVal Neither
-    else -- node (game not over)
-        fst $ nextPosition' (otherPlayer p) b
+minimaxVal m b
+    | winningPlayer b /= Neither    -> playerVal $ winningPlayer b
+    | isFull b                      -> playerVal Neither
+    | otherwise                     -> fst $ nextPosition' m (otherPlayer p) b
 
 -- returns all possible boards that a player can move to
 nextBoards :: Board -> Player -> [Board]
-nextBoards b p = map (addPos b p) (openPoses b)
+nextBoards b p = map (addPosition b p) (openPosition b)
 
 winningPlayer :: Board -> Player
-winningPlayer b =
-    if inLine [X, X, X] b then
-        X
-    else if inLine [O, O, O] b then
-        O
-    else
-        Neither
+winningPlayer b = if hasWon X b then X else if hasWon O b then O else Neither
 
-addPos :: Board -> Player -> Position -> Board
-addPos b p pos = \pos' -> if pos == pos' then p else b pos'
+addPosition :: Board -> Player -> Position -> Board
+addPosition b p pos = \pos' -> if pos == pos' then p else b pos'
 
-openPoses :: Board -> [Position]
-openPoses  b = [(r, c) | r <- [0..n], c <- [0..n], b (r, c) == Neither]
+openPosition :: Board -> [Position]
+openPosition  b = [(r, c) | r <- [0..n], c <- [0..n], b (r, c) == Neither]
 
--- True if the board contains the set of players in a line.
+-- True if the board contains n of the given player in a line.
 -- False otherwise.
-inLine :: [Player] -> Board -> Bool
-inLine ps b = checkHoriz || checkVert || checkDiag
+hasWon :: Player -> Board -> Bool
+hasWon p b = inLineHoriz || inLineVert || inLineDiag
     where
-        checkHoriz = checkRows b
-        checkVert = checkRows (transposeBoard b)
-        checkDiag = checkThree (diag1 b) || checkThree (diag2 b)
-        checkRows = or . (rowMap checkThree)
-        checkThree = ((==) (sort ps)) . sort
+        inLineN = (replicate n p ==)
+        inLineHoriz = or . (rowMap inLineN)
+        inLineVert = inLineHoriz (transposeBoard b)
+        inLineDiag = inLineN (diag1 b) || inLineN (diag2 b)
 
 
 -- debug --
 
 -- evaluates the final board and moves produced with the given first move
-playGame :: Position -> (Board, [Position])
-playGame firstMove =
-    play X (addPos blankBoard O firstMove) [firstMove]
-    where
-        blankBoard = \p -> Neither
-        gameOver b = (winningPlayer b) /= Neither || isFull b
-        play p b moves =
-            if gameOver b then
-                (b, moves)
-            else
-                let move = snd $ nextPosition' p b in
-                play (otherPlayer p) (addPos b p move) (move:moves)
+--playGame :: Position -> (Board, [Position])
+--playGame firstMove =
+--    play X (addPosition blankBoard O firstMove) [firstMove]
+--    where
+--        blankBoard = \p -> Neither
+--        gameOver b = (winningPlayer b) /= Neither || isFull b
+--        play p b moves =
+--            if gameOver b then
+--                (b, moves)
+--            else
+--                let move = snd $ nextPosition' p b in
+--                play (otherPlayer p) (addPosition b p move) (move:moves)
 
+--isTie :: Board -> Bool
+--isTie b = isFull b && winningPlayer b == Neither
 
-isFull :: Board -> Bool
-isFull b = and $ boardMap (Neither /=) b
-
-isTie :: Board -> Bool
-isTie b = isFull b && winningPlayer b == Neither
-
-debug :: [(String, [Position])]
-debug =
-    let boards = map playGame allPoses in
-    let tied_boards = filter (not . isTie . fst) boards in
-    map (\(b, ms) -> (makeBoardStr b, ms)) tied_boards
+--debug :: [(String, [Position])]
+--debug =
+--    let boards = map playGame allPositions in
+--    let tied_boards = filter (not . isTie . fst) boards in
+--    map (\(b, ms) -> (makeBoardStr b, ms)) tied_boards
